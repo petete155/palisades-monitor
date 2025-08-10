@@ -1,0 +1,102 @@
+
+<!DOCTYPE html>
+<html>
+<head>
+<link rel="manifest" href="/manifest.json">
+<meta name="theme-color" content="#111"/>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<link rel="apple-touch-icon" href="/icons/icon-192.png">
+
+<meta charset="UTF-8">
+<title>Palisades Monitor</title>
+<style>
+body { font-family: Arial, sans-serif; background-color: #111; color: #eee; }
+#log { white-space: pre-wrap; border: 1px solid #555; padding: 6px; height: 320px; overflow-y: auto; background: #000; }
+button { margin: 5px; padding: 8px 10px; }
+.small { color:#aaa; font-size: 12px; }
+</style>
+</head>
+<body>
+<h2>Palisades Monitor Portable (No IFTTT)</h2>
+<div class="small">Local-only: no emails sent. Same checks and alarm behavior.</div>
+<div>Status: <span id="status">Idle</span> <span id="last"></span></div>
+<div id="log"></div>
+<button id="start">Start</button>
+<button id="stop" disabled>Stop</button>
+<button id="testAlarm" disabled>Test Alarm</button>
+<button id="simulate">Simulate Event</button>
+<button id="save" disabled>Save log</button>
+
+<script>
+const API = "https://maps.cityofhenderson.com/arcgis/rest/services/public/ComDevServices/MapServer/1/query";
+const ADDRESS = "343 PALISADES DR";
+let timer=null, logs=[], maxLogs=20, fail=0;
+let alarmCtx=null, gain=null, osc=null;
+
+function log(m){ const t=new Date().toLocaleTimeString(); logs.push(`[${t}] ${m}`); if(logs.length>maxLogs) logs.shift(); document.getElementById('log').textContent=logs.join('\n'); }
+function setStatus(html){ document.getElementById('status').innerHTML = html; }
+function setLast(){ document.getElementById('last').textContent = ' · ' + new Date().toLocaleString(); }
+
+function params(){
+  const p = new URLSearchParams();
+  p.set('where', "REGISTERED_ADDRESS='343 PALISADES DR'");
+  p.set('outFields', 'STATUS,REGISTERED_ADDRESS');
+  p.set('returnGeometry','false');
+  p.set('f','json');
+  p.set('_', Date.now());
+  return p.toString();
+}
+function fetchWithTimeout(url, ms=8000){
+  const ctrl = new AbortController();
+  const id = setTimeout(()=>ctrl.abort(), ms);
+  return fetch(url, { mode:'cors', cache:'no-store', signal: ctrl.signal }).finally(()=>clearTimeout(id));
+}
+
+async function poll(){
+  try{
+    const url = API + "?" + params();
+    const r = await fetchWithTimeout(url, 8000);
+    setLast();
+    if(!r.ok) throw new Error('HTTP '+r.status);
+    const data = await r.json();
+    if(!data.features || data.features.length===0){
+      setStatus("<span style='color:#ff5a5a;font-weight:700'>Removed from map!</span>");
+      log("0 features");
+      alarmOn();
+      return;
+    }
+    const a=data.features[0].attributes||{};
+    const status=a.STATUS||"(no status)";
+    if(status!=='Active'){ setStatus("<span style='color:#ffb347;font-weight:700'>Status: "+status+"</span>"); log("STATUS="+status); alarmOn(); }
+    else { setStatus("<span style='color:#7CFC00'>OK: Active</span>"); log("STATUS=Active"); alarmOff(); }
+  }catch(e){
+    setStatus("<span style='color:#ffb347'>Network error</span>");
+    log("Fetch error: "+(e&&e.message||e));
+  }
+}
+
+function ensureAudio(){ if(!alarmCtx){ alarmCtx=new (window.AudioContext||window.webkitAudioContext)(); gain=alarmCtx.createGain(); gain.gain.value=0.15; gain.connect(alarmCtx.destination); } return alarmCtx.resume?alarmCtx.resume():Promise.resolve(); }
+async function alarmOn(){ if(osc) return; await ensureAudio(); osc=alarmCtx.createOscillator(); osc.type='square'; osc.frequency.setValueAtTime(740, alarmCtx.currentTime); osc.connect(gain); osc.start(); }
+function alarmOff(){ if(!osc) return; try{osc.stop();osc.disconnect();}catch(_){} osc=null; }
+function testAlarm(){ alarmOn(); setTimeout(alarmOff, 1200); }
+function simulateEvent(){ log("Simulated: Removed from map!"); setStatus("<span style='color:#ff5a5a;font-weight:700'>Removed from map! (simulated)</span>"); testAlarm(); }
+function saveLog(){ const blob=new Blob([logs.join('\n')], {type:'text/plain'}); const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='palisades_log.txt'; a.click(); }
+
+document.getElementById('start').onclick = async()=>{ await ensureAudio(); poll(); timer=setInterval(poll,30000); document.getElementById('start').disabled=true; document.getElementById('stop').disabled=false; document.getElementById('testAlarm').disabled=false; document.getElementById('save').disabled=false; log('Started.'); };
+document.getElementById('stop').onclick = ()=>{ clearInterval(timer); timer=null; log('Stopped.'); };
+document.getElementById('testAlarm').onclick = testAlarm;
+document.getElementById('simulate').onclick = simulateEvent;
+document.getElementById('save').onclick = saveLog;
+</script>
+
+<script>
+// Register Service Worker
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', function() {
+    navigator.serviceWorker.register('/sw.js').catch(function(e){ console.log('SW reg failed', e); });
+  });
+}
+</script>
+
+</body>
+</html>
