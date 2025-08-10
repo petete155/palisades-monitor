@@ -1,3 +1,2 @@
 
 # Palisades Monitor PWA (Vercel)
-
